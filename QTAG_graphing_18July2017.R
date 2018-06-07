@@ -784,7 +784,7 @@ output <- "TaxaSummaries"
 system(paste0("mkdir ",output))
 system(paste0("mkdir ./",output,"/IndividualPlots"))
 # system(paste0("biom convert -i ",biom," -o ./",output,"/OTUTable_text.txt --to-tsv --header-key taxonomy"))
-
+loessymax <- 0.1
 ############## Pre-amble; loading files, formatting, relative abund ###################
 # gradientNames <- read.delim(paste0(gradient)
 #                             , strip.white = TRUE
@@ -1110,7 +1110,7 @@ pdf(paste0('./',output,'/Taxadistributions.pdf'))
 # par(mar = c(4,4,1,1), oma = c(2,2,2,2))
 plot(x = NULL, y = NULL
      , xlim = c(1,max(ordered.gradient, na.rm = TRUE))
-     , ylim = c(0,max(taxaAbund.grad.filt)*1.25)
+     , ylim = c(0,loessymax)
      , ylab = "Abundance (%)"
      , xlab = "Salinity"
      , main = "Loess curve taxa distributions across salinitiy"
@@ -1244,7 +1244,7 @@ pdf(paste0('./',output,'/TaxadistributionsRelative.pdf'))
 par(fig=c(0,0.67,0,1))
 plot(x = NULL, y = NULL
      , xlim = c(1,max(ordered.gradient, na.rm = TRUE))
-     , ylim = c(0,max(taxaAbundTypesRelative)*1.25)
+     , ylim = c(0,loessymax)
      , ylab = "Abundance (%)"
      , xlab = "Salinity"
      , main = "Loess curves of taxa distributions (Relative)"
@@ -1378,7 +1378,8 @@ pdf(paste0('./',output,'/TaxadistributionsRelative_condensed.pdf'))
 par(fig=c(0,0.67,0,1))
 plot(x = NULL, y = NULL
      , xlim = c(1,max(ordered.gradient, na.rm = TRUE))
-     , ylim = c(0, max(taxaAbundTypesRelative)*1.25)
+     , ylim = c(0, loessymax)
+     # , ylim = c(0, max(taxaAbundTypesRelative)*0.75)
      , ylab = "Abundance (%)"
      , xlab = "Salinity"
      , main = "Loess curves of taxa distributions (Relative)"
@@ -1439,7 +1440,7 @@ pdf(paste0('./',output,'/TaxadistributionsRelativeAggregate.pdf'), width = 7, he
 par(fig=c(0,0.67,0,1))
 plot(x = NULL, y = NULL
      , xlim = c(1,max(ordered.gradient, na.rm = TRUE))
-     , ylim = c(0,max(aggregateRelativeAbund.df)*1.25)
+     , ylim = c(0,loessymax)
      , ylab = "Abundance (%)"
      , xlab = "Salinity"
      , main = "Aggregate loess curves of taxa distributions (Relative)"

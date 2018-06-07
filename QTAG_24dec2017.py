@@ -128,7 +128,7 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 	metadata = []
 	for line in tempMeta:
 		metadata.append([line[0],line[positionSal]])
-	# Now, change key names so they're not longer sites; they're salinities
+	# Now, change key names so they're not longer sites; they're gradient values
 	for site in metadata:
 		sites = [site[1] if x == site[0] else x for x in sites]
 	# Make proper format, but with site names instead of numbers
@@ -257,10 +257,10 @@ def typeTaxa(X, Y, listAbund): # Uses Welch's t-test and bins above to classify 
 	binValues = sortBins(X,Y,listAbund) # Use function above to create dictionary with abundance and salinity information
 	# Find out whether someting is Hi-,Lo-, or Inter- specific
 	groupA = binValues['lista']
-	groupB = binValues['listb'] # might be 1 in length
+	groupB = binValues['listb'] # should be at least 3 values in each list
 	groupC = binValues['listc']
 	meanA = average(groupA)
-	meanB = average(groupB) # might be 'None'
+	meanB = average(groupB) 
 	meanC = average(groupC)
 	# Find threshold by using proportion of max, if necessariy
 	if threshold[0] == True:
@@ -349,13 +349,8 @@ def typeTaxa(X, Y, listAbund): # Uses Welch's t-test and bins above to classify 
 	elif (meanA > meanC and sigAC): #or (meanB > meanC and sigBC and (meanB-meanC) > (meanB-meanA)): # More in fresh water and it's significant
 		# Above, you can have EITHER X>C or Y>C but they must be significant, and if it's Y, the distance between Y and C must be greater than the distance between X and Y (to prevent Intermediate-looking ones)
 		# Note that meanB-meanC should ALWAYS be greater than meanB-meanA because if meanB-meanA is negative, it means it's truly fresh!
-		if (sigAB and sigBC) or (not sigAB and not sigBC): # If there are actually significant difference between all three groups, then...
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)] # We scale by how significant each difference is. (eg. If a-b is very significant but b-c is not very significant, then the 'true' boundary is approximated to be closer to a-b than to b-c. 
+		typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)] # We scale by how significant each difference is. (eg. If a-b is very significant but b-c is not very significant, then the 'true' boundary is approximated to be closer to a-b than to b-c. 
 			# See function above for details
-		elif sigAB and not sigBC: # If there are ONLY significance differences between a-b, then we choose this as the boundary
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
-		elif sigBC and not sigAC: # If there are ONLY significance difference between b-c, then we choose this as the boundary.
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
 		if meanC < thresh:
 			typeOutput['type'] = Low + 'Restricted'
 			typeOutput['typeSimple'] = Low + 'Restricted'
@@ -363,12 +358,7 @@ def typeTaxa(X, Y, listAbund): # Uses Welch's t-test and bins above to classify 
 			typeOutput['type'] = Low + 'Peak'
 			typeOutput['typeSimple'] = Low + 'Restricted'
 	elif (meanC > meanA and sigAC): #or (meanB > meanA and sigAB and (meanB-meanA) > (meanB-meanC)): # This is same process as above, except for marine samples
-		if (sigAB and sigBC) or (not sigAB and not sigBC):
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)] # See above
-		elif sigAB and not sigBC:
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
-		elif sigBC and not sigAB:
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
+		typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)] # See above
 		if meanA < thresh:
 			typeOutput['type'] = High + 'Restricted'
 			typeOutput['typeSimple'] = High + 'Restricted'
@@ -561,7 +551,7 @@ def countListEvenLevels(listToCount,AllOptions):
 #=========================================================
 
 parser = argparse.ArgumentParser(
-	description="Bins and classifies OTUs according to salinity specialization")
+	description="Bins and classifies OTUs according to gradient specialization")
 parser.add_argument(
 	'-t',
 	'--taxaTable',
@@ -602,17 +592,17 @@ parser.add_argument(
 	required = False,
 	default = None)
 parser.add_argument(
-	'--minA',
+	'--minX',
 	help = "Minimum boundary X can be [default is minVal, the minimum gradient value]",
 	required = False,
 	default = 'Check')
 parser.add_argument(
-	'--maxB',
+	'--maxY',
 	help = 'Maximum boundary Y can be [default is maxVal,the maximum gradient value]',
 	required = False,
 	default = 'Check')
 parser.add_argument(
-	'--ABdiff',
+	'--XYdiff',
 	help = 'Difference between X ad Y [default 2 units]',
 	required = False,
 	type = float,
@@ -678,9 +668,9 @@ taxaTable = args.taxaTable
 metadata = args.metadata
 metadata_name = args.metadata_name
 gradient = args.gradient
-minA = args.minA
-maxB = args.maxB
-ABdiff = args.ABdiff
+minX = args.minX
+maxY = args.maxY
+XYdiff = args.XYdiff
 min_threshold_proportion = args.min_threshold_proportion
 min_threshold_constant = args.min_threshold_constant
 divisionSize = args.division_Size
@@ -707,8 +697,14 @@ Low = gradient[0]
 Inter = gradient[1]
 High = gradient[2]
 
-ABdiffunit = ABdiff*unitSize
+XYdiffunit = XYdiff*unitSize
 
+# Check if they want an even threshold or a proportional threshold
+if min_threshold_constant == None:
+	threshold = [True,min_threshold_proportion]
+else:
+	threshold = [False,min_threshold_constant]
+	
 # Make taxa summary using function
 taxasummariesRaw,taxaIDs = makeTaxaSummaries(taxaTable, metadata)
 taxasummaries = deleteLowAbund(taxasummariesRaw)
@@ -721,29 +717,22 @@ taxasummaries = deleteLowAbund(taxasummariesRaw)
 maxVal = max(taxasummaries[taxasummaries.keys()[1]][1])
 minVal = min(taxasummaries[taxasummaries.keys()[1]][1])
 
-if str(minA) == 'Check':
-	minA = int(minVal)
+if str(minX) == 'Check':
+	minX = int(minVal)
 else:
-	minA = int(minA)
+	minX = int(minX)
 	
-if str(maxB) == 'Check':
-	maxB = int(maxVal)
+if str(maxY) == 'Check':
+	maxY = int(maxVal)
 else:
-	maxB = int(maxB)
-
-
-# Check if they want an even threshold or a proportional threshold
-if min_threshold_constant == None:
-	threshold = [True,min_threshold_proportion]
-else:
-	threshold = [False,min_threshold_constant]
+	maxY = int(maxY)
 
 #==========================================
 # Step two: Make data
 
 
 # Dictionary that will have taxa as keys and a short list of paired [X,Y]
-bestfitAB = {}
+bestfitXY = {}
 taxaInfo = {}
 # modelDiffList = {}
 
@@ -757,10 +746,8 @@ for taxa in taxasummaries:
 	currentbest = 0 # going to compare 1/n of error squared because I know it can't be lower than 0. Conversely, not sure what maximum of n will be.
 	modelDiffList = []
 	listAbund = taxasummaries[taxa]
-	for i in sequenceGenerator(minA,(maxB-ABdiffunit),unitSize):
-		X = i
-		for j in sequenceGenerator((X+ABdiffunit),maxB,unitSize):
-			Y = j
+	for X in sequenceGenerator(minX,(maxY-XYdiffunit),unitSize):
+		for Y in sequenceGenerator((X+XYdiffunit),maxY,unitSize):
 			binValues = sortBins(X,Y,listAbund)
 			if len(binValues['lista']) <= 3 or len(binValues['listb']) <= 3 or len(binValues['listc']) <= 3: # if the bins have nothing in them, then don't use that bin combination
 				pass
@@ -772,42 +759,41 @@ for taxa in taxasummaries:
 					pass
 				else:
 					invMES = 1/MES
-					modelDiffAsq = (average(binValues['lista']) - average(binValues['listb']))**2
-					modelDiffBsq = (average(binValues['listb']) - average(binValues['lista']))**2
-					modelDiff = (modelDiffAsq + modelDiffBsq)
+					modelDiffXsq = (average(binValues['lista']) - average(binValues['listb']))**2
+					modelDiffYsq = (average(binValues['listb']) - average(binValues['listc']))**2
+					modelDiff = (modelDiffXsq + modelDiffYsq)
 					if invMES > currentbest:
-						bestfitAB[taxa] = [[X,Y]]
+						bestfitXY[taxa] = [[X,Y]]
 						currentbest = invMES
 						modelDiffList = [modelDiff]
 					elif invMES == currentbest:
-						bestfitAB[taxa].append([X,Y])
+						bestfitXY[taxa].append([X,Y])
 						modelDiffList.append([modelDiff])
-	firstBoundary = []
-	secondBoundary = []
-	for i in bestfitAB[taxa]:
-		firstBoundary.append(i[0])
-		secondBoundary.append(i[1])
-# 	overallDiff = []
-# 	for i in modelDiffList:
-# 		overallDiff.append(i)
-	maxDifferenceFoundPosition = [modelDiffList.index(i) for i in modelDiffList if i == max(modelDiffList)]
-	differencesA = numpy.diff(firstBoundary)
-	differencesB = numpy.diff(secondBoundary)
-	differencesAB = list(differencesA) + list(differencesB)
-	if len(maxDifferenceFoundPosition) > 1 and (True in [True for i in differencesAB if i > 1]): # If consecutive numbers AND same diff
-		print "WARNING: SAME MODELDIFF FOR IDENTICAL MODELS-Br"
-		print taxa
-		print firstBoundary
-		print secondBoundary
-	firstBoundaries = []
-	secondBoundaries = []
-	for i in maxDifferenceFoundPosition:
-		firstBoundaries.append(firstBoundary[i])
-		secondBoundaries.append(secondBoundary[i])
-	aveFirst = average(firstBoundaries)
-	aveSecond = average(secondBoundaries)
-	typeInfo = typeTaxa(aveFirst,aveSecond,listAbund) # type is going to be list of type and boundaries
-	taxaInfo[taxa] = typeInfo
+	if len(bestfitXY[taxa]) == 1:
+		aveFirst = bestfitXY[taxa][0][0]
+		aveSecond = bestfitXY[taxa][0][1]
+	else:
+		firstBoundary = []
+		secondBoundary = []
+		for i in bestfitXY[taxa]:
+			firstBoundary.append(i[0])
+			secondBoundary.append(i[1])
+		maxDifferenceFoundPosition = [modelDiffList.index(i) for i in modelDiffList if i == max(modelDiffList)]
+		differencesX = numpy.diff(firstBoundary)
+		differencesY = numpy.diff(secondBoundary)
+		differencesXY = list(differencesX) + list(differencesY)
+		if len(maxDifferenceFoundPosition) > 1 and (True in [True for i in differencesXY if i > 1]): # If consecutive numbers AND same diff
+			print "WARNING: SAME MODELDIFF FOR IDENTICAL MODELS-Br"
+			print taxa, firstBoundary, secondBoundary
+		firstBoundaries = []
+		secondBoundaries = []
+		for i in maxDifferenceFoundPosition:
+			firstBoundaries.append(firstBoundary[i])
+			secondBoundaries.append(secondBoundary[i])
+		aveFirst = average(firstBoundaries)
+		aveSecond = average(secondBoundaries)
+	taxaInfo[taxa] = typeTaxa(aveFirst,aveSecond,listAbund) # type is going to be list of type and boundaries
+# 	taxaInfo[taxa] = typeInfo
 
 print("DONE ITERATIONS")
 transitions = summaryBoundaryTypes(taxaInfo) # list of all boundaries
@@ -916,7 +902,7 @@ for type in allTypesUnique:
 
 # combined = result from makeAModel
 # transitions = list of all boundaries; can do histogram with output
-# bestfitAB = dictionary, where indices are 'taxa' and then it lists their boundaries
+# bestfitXY = dictionary, where indices are 'taxa' and then it lists their boundaries
 # listAbund = [abundance,salinity]
 print "Printing and saving..."
 
@@ -1059,7 +1045,7 @@ LOG = open("LOG.txt", 'wr')
 LOG.write(output_dir + '\n')
 # if notes == True:
 # 	LOG.write(raw_input("Type short description or comment, then press enter:\n") + '\n')
-LOG.write("Settings: \n"+ "minA =" + str(minA) + "\nmaxB =" + str(maxB) + "\nABdiff =" + str(ABdiff) + "\nminVal =" + str(minVal) + "\nmaxVal =" + str(maxVal) + "\nDivSize =" + str(divisionSize) + "\nunitSize = " + str(unitSize))
+LOG.write("Settings: \n"+ "minX =" + str(minX) + "\nmaxY =" + str(maxY) + "\nXYdiff =" + str(XYdiff) + "\nminVal =" + str(minVal) + "\nmaxVal =" + str(maxVal) + "\nDivSize =" + str(divisionSize) + "\nunitSize = " + str(unitSize))
 LOG.write("\nthreshold =" + str(min_threshold_proportion))
 LOG.write("\nFull PWD: \ntaxasummaries = " + taxaTable + "\nmetadata = " + metadata + "\ntree = " + tree)
 LOG.write("\nLow: "+ Low)

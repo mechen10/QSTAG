@@ -3,11 +3,30 @@
 #==========================================
 # QUANTIFICATION OF TURNOVER ALONG GRADIENTS
 # By Melissa Chen
-# Version 17-04-10
+# Version 15-May-2018
 # Built under python 2.7.11
 # April 10th, 2017
 #==========================================
 
+##### TO DELETE####
+# Not checked yet:
+# changed taxaTable and metadata to taxaTablePWD and metadataPWD
+# added minCountTable and minCountBin
+# added minCountOTU filtering in loading of table
+# added manual sigthresh
+# got rid of tree
+# fixed the way ubiq was calculated; fixed math but also added in a requirement that all ubiq must have half of observations as NON zeros.
+# changed flow of inter blooms; was impossibly to reach before. Now, it is assessed with other bloom types
+# changed order of saving typeoutput; was extraneous before.
+# added bestfitTies file which tells you about warnings
+# added levene's test to test difference in variances; also introduced new critpVar** need to assess side effects
+# Maybe get rid of boundaries.txt in future because it seemed extraneous; will have to edit plotting script
+# Got rid of checkValue because it didn't work as it should; not sure how it should work
+# Got rid of suppress printing bins because it didn't seem to be necessary; might as well print everything.
+# changed thresh test to <= for typeTaxa so that you can set to '0' if you want it to be TRULY absent
+# tried using man whitney U test for means comparisons instead, since the data is very non-parametric. Seems to have more power this way; less things are classified as "noclass"
+# sometimes manwhitney U test is too sensitive, esp during zero-inflated groups. So changed the requirements so that difference of means must be sig AND one of them must be greater than thresh
+######
 
 # This script takes an OTU table (output from QIIME) and mappingfile with salinity (QIIME-compatible) and produces the following text outputs:
 	# 1. modelBoundaries_type.txt (Rows are unique OTUs; headers are 'OTU ID', 'taxonomy', 'type', 'typeSimple', 'X', 'Y', 'sigAB', 'sigBC', 'sigAC', 'boundaries', 'boundariestwo', 'bloom' )
@@ -37,10 +56,13 @@
 		# argparse
 		# os
 		# subprocess
+		# time sleep
+		#sys
 	# Also:
 		# macqiime
 	# Optional dependencies:
 		# R script for plotting
+		
 		
 
 #==========================================
@@ -54,6 +76,8 @@ from scipy import stats # For welch's t-test
 import argparse
 import os
 import subprocess
+from time import sleep
+import sys
 
 #==========================================
 
@@ -72,6 +96,7 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 		# (b) Dictionary where keys are OTU IDs and content is taxonomy (taxaIDs)
 		# 		Taxonomies are taken from the observation metadata from the OTU table
 	global metadata_name # This is the header name in the metadata file of the values to be assessed
+	global minCountOTUinSample
 	print "Making and loading taxa table and metadata table..."
 	os.system('biom convert -i ' + taxaTablePWD + ' --to-tsv --header-key taxonomy --table-type="OTU table" -o ./OTUTableText.txt') # This is done in BASH
 	taxaOpen = open('./OTUTableText.txt', 'rU') 
@@ -111,10 +136,11 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 			for j in range(1,len(tempList[i])-1):
 				# Sum of all abundances to make relative abundances
 				sumAbund = int(taxaCountsTemp[str(j)])
-				value = tempList[i][j]
-				taxaTable[tempList[i][0]][0].append(float(value)/float(sumAbund))
+				value = float(tempList[i][j])
+				if value < minCountOTUinSample:
+					value = 0.0	
+				taxaTable[tempList[i][0]][0].append(value/float(sumAbund))
 				# Save values as relative abundances instead of absolute ones
- 				# taxaTable[tempList[i][0]] = [[float(x)/sumAbund for x in values]]
 	metadataOpen = open(metadataPWD, 'rU')
 	metadataOpenTemp = []
 	for i in metadataOpen:
@@ -128,7 +154,7 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 	metadata = []
 	for line in tempMeta:
 		metadata.append([line[0],line[positionSal]])
-	# Now, change key names so they're not longer sites; they're salinities
+	# Now, change key names so they're not longer sites; they're gradient values
 	for site in metadata:
 		sites = [site[1] if x == site[0] else x for x in sites]
 	# Make proper format, but with site names instead of numbers
@@ -142,14 +168,14 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 #==========================================
 # Delete certain taxa based on total abundance; must be sufficiently abundant in order to work
 
-def deleteLowAbund(taxasummary): # Change to absolute threshold, or get rid of entirely. Get rid of show ups in < 3 samples
+def deleteLowAbund(taxasummary,minCount): # Change to absolute threshold, or get rid of entirely. Get rid of show ups in < 3 samples
 	newTaxaSummary = {}
 	for taxa in taxasummary:
 		nonzeroCount = 0
 		for i in taxasummary[taxa][0]:
 			if i > 0.0:
 				nonzeroCount += 1
-		if nonzeroCount >= 3:
+		if nonzeroCount >= minCount:
 			newTaxaSummary[taxa] = taxasummary[taxa]
 	return newTaxaSummary
 
@@ -239,7 +265,7 @@ def scaleByDiff(X,Y,meanA,meanB,meanC): # Scale X and Y into B given differences
 			diffscaled = diffXY*scaleFactor
 			finalBoundary = X+diffscaled
 	if meanA == meanC:
-		print "ERROR"
+		print "WARNING:ERROR IN CALCULATING SCALEBYDIFF. Two means are exactly the same. Should not occur because it is classified as Hi or Lo"
 	return finalBoundary
 
 def typeTaxa(X, Y, listAbund): # Uses Welch's t-test and bins above to classify taxa as Hi, Lo, or Inter (or other)
@@ -253,14 +279,17 @@ def typeTaxa(X, Y, listAbund): # Uses Welch's t-test and bins above to classify 
 	global threshold
 	global Low,Inter,High
 	global ubiqOverlapThresh
+	global propUbiqNonzero
+	global critp
+	global critpVar
 	typeOutput = {'boundaries':[], 'type': '', 'typeSimple':'', 'meanA': [], 'meanB': [], 'meanC': [], 'X': [], 'Y': [], 'sigAB': [], 'sigBC': [], 'sigAC': [], 'bloom': 'No'} # Empty dictionary
 	binValues = sortBins(X,Y,listAbund) # Use function above to create dictionary with abundance and salinity information
 	# Find out whether someting is Hi-,Lo-, or Inter- specific
 	groupA = binValues['lista']
-	groupB = binValues['listb'] # might be 1 in length
+	groupB = binValues['listb'] # should be at least 3 values in each list
 	groupC = binValues['listc']
 	meanA = average(groupA)
-	meanB = average(groupB) # might be 'None'
+	meanB = average(groupB) 
 	meanC = average(groupC)
 	# Find threshold by using proportion of max, if necessariy
 	if threshold[0] == True:
@@ -268,25 +297,27 @@ def typeTaxa(X, Y, listAbund): # Uses Welch's t-test and bins above to classify 
 		thresh = maxAbund*threshold[1]
 	else:
 		thresh = threshold[1]
-	bonef = 0.05/2 # boneferri correction; for each taxa, we are repeatedly comparing means (comparing twice; AB-BC OR AB-AC OR AC-BC)
 	# Calculate variance, but first test if each combination of groups has 0 variance.
 	# If variance is 0, set p** to 1, which is maximum
 	if average(groupA) == average(groupC) and numpy.var(groupA) == 0 and numpy.var(groupC) == 0:
 		pAC = 1
 	else:
-		pAC = stats.ttest_ind(groupA,groupC, equal_var = False)[1] # p-value of A vs C
+# 		pAC = stats.ttest_ind(groupA,groupC, equal_var = False)[1] # p-value of A vs C
+		pAC = stats.mannwhitneyu(groupA,groupC)[1] # p-value of A vs C
 	if average(groupA) == average(groupB) and numpy.var(groupA) == 0 and numpy.var(groupB) == 0:
 		pAB = 1
 	else:
-		pAB = stats.ttest_ind(groupA,groupB, equal_var = False)[1] # p-value of A vs B
+# 		pAB = stats.ttest_ind(groupA,groupB, equal_var = False)[1] # p-value of A vs B
+		pAB = stats.mannwhitneyu(groupA,groupB)[1] # p-value of A vs B
 	if average(groupB) == average(groupC) and numpy.var(groupB) == 0 and numpy.var(groupC) == 0:
 		pBC = 1
 	else:
-		pBC = stats.ttest_ind(groupB,groupC, equal_var = False)[1] # p-value of B vs C
+# 		pBC = stats.ttest_ind(groupB,groupC, equal_var = False)[1] # p-value of B vs C
+		pBC = stats.mannwhitneyu(groupB,groupC)[1] # p-value of B vs C
 # 	print pAC,pAB,pBC
-	sigAB = pAB < bonef # True if significant
-	sigBC = pBC < bonef # True if significant
-	sigAC = pAC < bonef # True if significant
+	sigAB = pAB < critp # True if significant
+	sigBC = pBC < critp # True if significant
+	sigAC = pAC < critp # True if significant
 	Stda = numpy.std(groupA) # For 'bloom' test
 	Stdb = numpy.std(groupB)
 	Stdc = numpy.std(groupC)
@@ -298,123 +329,140 @@ def typeTaxa(X, Y, listAbund): # Uses Welch's t-test and bins above to classify 
 	typeOutput['meanC'] = meanC
 	typeOutput['X'] = X
 	typeOutput['Y'] = Y
+	typeOutput['bloom'] =  'No'
 	isInter = False	# See if there is an intermediate community or not; if there isn't, then I compare just X and C.
+	isLow = False
+	isHigh = False
 	if sigAB and sigBC: # When the middle group is REAL (and not just 1 number), and it is significantly different than both flanking groups
-		if meanB > meanA and meanB > meanC: # intermediate species
+		if meanB > meanA and meanB > meanC and meanB > thresh: # intermediate species
 			isInter = True
 			typeOutput['boundaries'] = [X,Y]
-			typeOutput['sigAB'] = pAB
-			typeOutput['sigBC'] = pBC
-			typeOutput['sigAC'] = pBC 
- 			typeOutput['meanA'] = meanA
- 			typeOutput['meanB'] = meanB
- 			typeOutput['meanC'] = meanC
- 			typeOutput['X'] = X
-			typeOutput['Y'] = Y
-			if meanA < threshold and meanC < thresh: # "very" intermediate; that is, the abundances are basically 0 on either side 
+			typeOutput['typeSimple'] = Inter + 'Restricted'
+			if meanA <= thresh and meanC <= thresh: # "very" intermediate; that is, the abundances are basically 0 on either side 
 				typeOutput['type'] = Inter+'Restricted'
-				typeOutput['typeSimple'] = Inter + 'Restricted'
-			elif meanA < thresh and meanC > thresh: # leaning towards being hi
+			elif meanA <= thresh and meanC > thresh: # leaning towards being hi
 				typeOutput['type'] = Inter+'PeakHiToler'
-				typeOutput['typeSimple'] = Inter+ 'Restricted'
-			elif meanA > thresh and meanC < thresh: # leaning towards being lo
+			elif meanA > thresh and meanC <= thresh: # leaning towards being lo
 				typeOutput['type'] = Inter+'PeakLoToler'
-				typeOutput['typeSimple'] = Inter + 'Restricted'
 			else: # both meanA and meanC are larger than 0
 				typeOutput['type'] = Inter+'PeakAllToler'
-				typeOutput['typeSimple'] = Inter + 'Restricted'
-		elif meanB < meanA and meanB < meanC: # inv-inter water-- shouldn't exist according to hypothesis, but I put it in as a fail-safe
+		elif meanB < meanA and meanB < meanC and meanA > thresh and meanC > thresh: # inv-inter water-- shouldn't exist according to hypothesis, but I put it in as a fail-safe
 			isInter = True
 			typeOutput['type'] = 'inv'+Inter
 			typeOutput['typeSimple'] = 'noclass'
 			typeOutput['boundaries'] = [X,Y]
-			typeOutput['sigAB'] = pAB
-			typeOutput['sigBC'] = pBC
-			typeOutput['sigAC'] = pBC 
- 			typeOutput['meanA'] = meanA
- 			typeOutput['meanB'] = meanB
- 			typeOutput['meanC'] = meanC
- 			typeOutput['X'] = X
-			typeOutput['Y'] = Y
-		elif Stdb >= 2*Stda and Stdb >= 2*Stdc and meanC < thresh and meanA < thresh and meanB > meanC and meanB > meanA:
-	 		isInter = True
-	 		typeOutput['type'] = Inter+'Bloom'
-	 		typeOutput['bloom'] = Inter
-	 		typeOutput['typeSimple'] = Inter + 'Restricted'
-	 		typeOutput['boundaries'] = [X,Y]
 		else:
  			pass	# All other combos mean the intermediates do NOT exist, so we can just compare X and C
 	if isInter: # If the group is already classified as either Inter or inv-Inter, then we skip the next loop. If it is not classified, we continue.
 		pass
-	elif (meanA > meanC and sigAC): #or (meanB > meanC and sigBC and (meanB-meanC) > (meanB-meanA)): # More in fresh water and it's significant
+	elif (meanA > meanC and sigAC and meanA > thresh): #or (meanB > meanC and sigBC and (meanB-meanC) > (meanB-meanA)): # More in fresh water and it's significant
 		# Above, you can have EITHER X>C or Y>C but they must be significant, and if it's Y, the distance between Y and C must be greater than the distance between X and Y (to prevent Intermediate-looking ones)
 		# Note that meanB-meanC should ALWAYS be greater than meanB-meanA because if meanB-meanA is negative, it means it's truly fresh!
-		if (sigAB and sigBC) or (not sigAB and not sigBC): # If there are actually significant difference between all three groups, then...
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)] # We scale by how significant each difference is. (eg. If a-b is very significant but b-c is not very significant, then the 'true' boundary is approximated to be closer to a-b than to b-c. 
+		isLow = True
+		typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)] # We scale by how significant each difference is. (eg. If a-b is very significant but b-c is not very significant, then the 'true' boundary is approximated to be closer to a-b than to b-c. 
 			# See function above for details
-		elif sigAB and not sigBC: # If there are ONLY significance differences between a-b, then we choose this as the boundary
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
-		elif sigBC and not sigAC: # If there are ONLY significance difference between b-c, then we choose this as the boundary.
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
-		if meanC < thresh:
+		if meanC <= thresh:
 			typeOutput['type'] = Low + 'Restricted'
 			typeOutput['typeSimple'] = Low + 'Restricted'
 		else:
 			typeOutput['type'] = Low + 'Peak'
 			typeOutput['typeSimple'] = Low + 'Restricted'
-	elif (meanC > meanA and sigAC): #or (meanB > meanA and sigAB and (meanB-meanA) > (meanB-meanC)): # This is same process as above, except for marine samples
-		if (sigAB and sigBC) or (not sigAB and not sigBC):
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)] # See above
-		elif sigAB and not sigBC:
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
-		elif sigBC and not sigAB:
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
-		if meanA < thresh:
+	elif (meanC > meanA and sigAC and meanC > thresh): #or (meanB > meanA and sigAB and (meanB-meanA) > (meanB-meanC)): # This is same process as above, except for marine samples
+		isHigh = True
+		typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)] # See above
+		if meanA <= thresh:
 			typeOutput['type'] = High + 'Restricted'
 			typeOutput['typeSimple'] = High + 'Restricted'
 		else:
 			typeOutput['type'] = High + 'Peak'
 			typeOutput['typeSimple'] = High + 'Restricted'
-	else:
+	if not any([isInter, isLow, isHigh]) : # if it has not been sorted yet:
 		# Calculate whether the ranges of equal bins to overlap over the threshold set
 		binThirds = sortBins(max(listAbund[1])*0.33,max(listAbund[1])*0.66,listAbund) 
 		groupRanges = [[min(binThirds['lista']), max(binThirds['lista'])],[min(binThirds['listb']), max(binThirds['listb'])],[min(binThirds['listc']), max(binThirds['listc'])]]
 		allOverlaps = []
 		for i in range(0,len(groupRanges)):
 			for j in range(0,len(groupRanges)):
-				difflwr = max(0,groupRanges[i][0] - groupRanges[j][0])
+				difflwr = max(0,groupRanges[j][0] - groupRanges[i][0])
 				diffuppr = max(0,groupRanges[i][1] - groupRanges[j][1])
 				totalDist = groupRanges[i][1]-groupRanges[i][0]
 				if totalDist == 0:
 					totalDist = 1
 				finalOverlap = 1-(difflwr + diffuppr)/float(totalDist)
 				allOverlaps.append(finalOverlap)
-		if all([i >= ubiqOverlapThresh for i in allOverlaps]):
+		# Also, calculate the number of zero and non-zero observations in ALL groups
+		zerosprop = sum([1 for i in listAbund[0] if i == 0])/float(len(listAbund[0]))
+		if zerosprop < propUbiqNonzero:
+			ubiqZeroTestPass = True
+		else:
+			ubiqZeroTestPass = False
+		if all([i >= ubiqOverlapThresh for i in allOverlaps]) and ubiqZeroTestPass: # passes both the overlap test and zero proportions test
 			typeOutput['type'] = 'ubiquitous' # basically everywhere at similar levels
+			typeOutput['typeSimple'] = 'noclass' # 'catch-all' for things that have NO significant differences between any of the groups
+			typeOutput['boundaries'] = ['',''] 
 		else:
-			typeOutput['type'] = 'noclass'
-		typeOutput['typeSimple'] = 'noclass' # 'catch-all' for things that have NO significant differences between any of the groups
-		typeOutput['boundaries'] = ['',''] 
-		typeOutput['sigAB'] = pAB
-		typeOutput['sigBC'] = pBC
-		typeOutput['sigAC'] = pBC 
-		typeOutput['meanA'] = meanA
-		typeOutput['meanB'] = meanB
-		typeOutput['meanC'] = meanC
-		typeOutput['X'] = X
-		typeOutput['Y'] = Y
-		if Stdc >= 2*Stda and meanC > meanA and meanC > meanB and meanA < thresh:
-			typeOutput['bloom'] = High
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
-			typeOutput['type'] = High + 'Bloom'
-			typeOutput['typeSimple'] = High + 'Restricted'
-		elif Stda >= 2*Stdc and meanA > meanC and meanA > meanB and meanC < thresh:
-			typeOutput['bloom'] =  Low
-			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
-			typeOutput['type'] = Low + 'Bloom'
-			typeOutput['typeSimple'] = Low + 'Restricted'
-		else:
-			typeOutput['bloom'] = 'No'
+			##### TESTING OUT LEVENE'S TEST INSTEAD Of STD######
+			#problem arises when two groups are EXACTLY the same; so let's check for that first.
+			if len(set(groupA)) == 1 and len(set(groupB)) == 1 and set(groupA) == set(groupB):
+				varABp = 1
+			else:
+				varABp = stats.levene(groupA,groupB)[1]
+			if len(set(groupB)) == 1 and len(set(groupC)) == 1 and set(groupB) == set(groupC):
+				varBCp = 1
+			else:
+				varBCp = stats.levene(groupB,groupC)[1]
+			if len(set(groupA)) == 1 and len(set(groupC)) == 1 and set(groupA) == set(groupC):
+				varACp = 1
+			else:
+				varACp = stats.levene(groupA,groupC)[1]
+			sigvarAB = varABp < critpVar
+			sigvarBC = varBCp < critpVar
+			sigvarAC = varACp < critpVar
+			if Stdb > Stda and Stdb > Stdc and sigvarAB and sigvarBC and meanC <= thresh and meanA <= thresh and meanB > meanC and meanB > meanA:
+				isInter = True
+				typeOutput['type'] = Inter+'Bloom'
+				typeOutput['bloom'] = Inter
+				typeOutput['typeSimple'] = Inter + 'Restricted'
+				typeOutput['boundaries'] = [X,Y]
+			elif Stdc > Stda and sigvarAC and meanC > meanA and meanC > meanB and meanA <= thresh:
+				typeOutput['bloom'] = High
+				typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
+				typeOutput['type'] = High + 'Bloom'
+				typeOutput['typeSimple'] = High + 'Restricted'
+			elif Stda > Stdc and sigvarAC and meanA > meanC and meanA > meanB and meanC <= thresh:
+				typeOutput['bloom'] =  Low
+				typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
+				typeOutput['type'] = Low + 'Bloom'
+				typeOutput['typeSimple'] = Low + 'Restricted'
+			else:
+				typeOutput['type'] = 'noclass'
+				typeOutput['typeSimple'] = 'noclass' # 'catch-all' for things that have NO significant differences between any of the groups
+				typeOutput['boundaries'] = ['',''] 
+		#######################################
+# 		if all([i >= ubiqOverlapThresh for i in allOverlaps]) and ubiqZeroTestPass: # passes both the overlap test and zero proportions test
+# 			typeOutput['type'] = 'ubiquitous' # basically everywhere at similar levels
+# 			typeOutput['typeSimple'] = 'noclass' # 'catch-all' for things that have NO significant differences between any of the groups
+# 			typeOutput['boundaries'] = ['',''] 
+# 		elif Stdb >= 2*Stda and Stdb >= 2*Stdc and meanC <= thresh and meanA <= thresh and meanB > meanC and meanB > meanA:
+# 	 		isInter = True
+# 	 		typeOutput['type'] = Inter+'Bloom'
+# 	 		typeOutput['bloom'] = Inter
+# 	 		typeOutput['typeSimple'] = Inter + 'Restricted'
+# 	 		typeOutput['boundaries'] = [X,Y]
+# 		elif Stdc >= 2*Stda and meanC > meanA and meanC > meanB and meanA <= thresh:
+# 			typeOutput['bloom'] = High
+# 			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
+# 			typeOutput['type'] = High + 'Bloom'
+# 			typeOutput['typeSimple'] = High + 'Restricted'
+# 		elif Stda >= 2*Stdc and meanA > meanC and meanA > meanB and meanC <= thresh:
+# 			typeOutput['bloom'] =  Low
+# 			typeOutput['boundaries'] = [scaleByDiff(X,Y,meanA,meanB,meanC)]
+# 			typeOutput['type'] = Low + 'Bloom'
+# 			typeOutput['typeSimple'] = Low + 'Restricted'
+# 		else:
+# 			typeOutput['type'] = 'noclass'
+# 			typeOutput['typeSimple'] = 'noclass' # 'catch-all' for things that have NO significant differences between any of the groups
+# 			typeOutput['boundaries'] = ['',''] 
 	return typeOutput # Output is a dictionary, in each taxa name there is 'type' and 'boundaries'; also, meanA, meanB, meanC, X, Y-- this is for downstream stuff
 
 
@@ -462,7 +510,7 @@ def summaryBoundaryTypes(taxaInfo):
 
 def sequenceGenerator(min,max,binSize): # Make sequence from max value, min value, and binsize. List includes min and max bin values. Integers.
 	if max < min:
-		print "Error, max is less than min"
+		print "ERROR, max is less than min when trying to generate sequence in sequenceGenerator"
 		return
 	breadth = max-min
 	nbins = math.ceil(float(breadth)/float(binSize))
@@ -561,7 +609,7 @@ def countListEvenLevels(listToCount,AllOptions):
 #=========================================================
 
 parser = argparse.ArgumentParser(
-	description="Bins and classifies OTUs according to salinity specialization")
+	description="Bins and classifies OTUs according to gradient specialization")
 parser.add_argument(
 	'-t',
 	'--taxaTable',
@@ -584,7 +632,6 @@ parser.add_argument(
 	required = False,
 	default = 'GradientProcessing')
 parser.add_argument(
-	'-g',
 	'--gradient',
 	help = 'Names for three points of gradient-- must have low, intermediate, and high name (Eg. Fresh, Brackish, Marine). Comma separated. [default: Low,Inter,High]',
 	required = False,
@@ -592,28 +639,28 @@ parser.add_argument(
 	default = 'Low,Inter,High')
 parser.add_argument(
 	'--min_threshold_proportion',
-	help = 'Proportional threshold for OTU abundances to be considered "non-zero" [default 0.10]',
+	help = 'Proportional threshold for OTU abundances to be considered "non-zero". If both min_threshold_proportion and min_threshold_constant is supplied, constant will be used. [default 0.10]',
 	required = False,
 	type = float,
 	default = 0.10)
 parser.add_argument(
 	'--min_threshold_constant',
-	help = 'Constant threshold for OTU abundances to be considered "non-zero" [default None]',
+	help = 'Constant threshold for OTU abundances to be considered "non-zero". If both min_threshold_proportion and min_threshold_constant is supplied, constant will be used. [default None]',
 	required = False,
 	default = None)
 parser.add_argument(
-	'--minA',
-	help = "Minimum boundary X can be [default is minVal, the minimum gradient value]",
+	'--minX',
+	help = "Minimum value for boundary X. IMPORTANT: default rounds the minimum gradient value down to nearest whole number. There may be situations where this value should be set manually. [default is minVal, the minimum gradient value]",
 	required = False,
 	default = 'Check')
 parser.add_argument(
-	'--maxB',
-	help = 'Maximum boundary Y can be [default is maxVal,the maximum gradient value]',
+	'--maxY',
+	help = 'Maximum value for boundary Y IMPORTANT: default rounds the maximum gradient value up to nearest whole number. There may be situations where this value should be set manually. [default is maxVal,the maximum gradient value]',
 	required = False,
 	default = 'Check')
 parser.add_argument(
-	'--ABdiff',
-	help = 'Difference between X ad Y [default 2 units]',
+	'--XYdiff',
+	help = 'Difference in UNITS between X and Y. Note: this is not raw difference between X and Y. This means how many increments you want to differentiate X and Y. For example, if your increments are 0.1PSU and you want X and Y to be at least 2PSU apart, then this value is actually 2/0.1=20 [default 2 units]',
 	required = False,
 	type = float,
 	default = 2)
@@ -627,44 +674,64 @@ parser.add_argument(
 	help = 'Unit size of gradient to iterate through when fitting model. [default 1]',
 	required = False,
 	default = 1)
+# parser.add_argument(
+# 	'--allBins_SUPPRESS',
+# 	action =  'store_false',
+# 	help = 'Include this flag if you DO NOT want to make generate all bins. [Default: True]',
+# 	required = False,
+# 	default = True)
+# parser.add_argument(
+# 	'--condensedBins_SUPPRESS',
+# 	action =  'store_false',
+# 	help = 'Include this flag if you DO NOT want to make condensed bins. [Default: True]',
+# 	required = False,
+# 	default = True)
+# parser.add_argument(
+# 	'--check_class',
+# 	action =  'store_true',
+# 	help = 'Include this flag if you want the script to double-check classifications at end. See documentation for how this is done. [Default: False]',
+# 	required = False,
+# 	default = False)
+# parser.add_argument(
+# 	'--check_value',
+# 	help = 'If check_class is true, then use this flag to change the percentile that you use to double check classifications. [Default: 0.10]',
+# 	required = False,
+# 	default = 0.10)
 parser.add_argument(
-	'-T',
-	'--tree',
-	help = 'File path to tree',
-	required = True)
-parser.add_argument(
-	'-a',
-	'--allBins_SUPPRESS',
-	action =  'store_false',
-	help = 'Include this flag if you DO NOT want to make generate all bins. [Default: True]',
-	required = False,
-	default = True)
-parser.add_argument(
-	'-c',
-	'--condensedBins_SUPPRESS',
-	action =  'store_false',
-	help = 'Include this flag if you DO NOT want to make condensed bins. [Default: True]',
-	required = False,
-	default = True)
-parser.add_argument(
-	'-C',
-	'--check_class',
-	action =  'store_true',
-	help = 'Include this flag if you want the script to double-check classifications at end. See documentation for how this is done. [Default: False]',
-	required = False,
-	default = False)
-parser.add_argument(
-	'-v',
-	'--check_value',
-	help = 'If check_class is true, then use this flag to change the percentile that you use to double check classifications. [Default: 0.10]',
+	'--ubiq_overlap_threshold',
+	help = 'When testing for ubiquitous taxa, the percent overlap required between bins to be considered ubiquitous. [Default: 0.10]',
 	required = False,
 	default = 0.10)
 parser.add_argument(
-	'-u',
-	'--ubiq_overlap_threshold',
-	help = 'When testing for ubiquitous taxa, the percent overlap required between bins to be considered ubiquitous. [Default: 0.50]',
+	'--prop_ubiq_nonzero',
+	help = 'When testing for ubiquitous taxa, the proportion of samples that must have non-zero abundances for that taxa. Will influence whether taxa is ubiquitous or noclass [Default: 0.30]',
 	required = False,
-	default = 0.50)
+	default = 0.30)
+parser.add_argument(
+	'--minCountTable',
+	help = 'Minimum number of reads found in entire OTU table for an OTU to be kept. [Default: 3]',
+	required = False,
+	default = 5)
+parser.add_argument(
+	'--minCountBin',
+	help = 'Minimum number of OTUs in each bin (A, B, C) in order for that bin combination to be valid. (Equal or greater than minCountBin) [Default: 3]',
+	required = False,
+	default = 3)
+parser.add_argument(
+	'--minCountOTUinSample',
+	help = 'Minimum number of reads of any OTU in a sample in order for that OTU to be considered "non-zero". If the number of reads of that OTU in a sample is LESS than this value, then it will be changed to have an abundance of zero. [Default: 5]',
+	required = False,
+	default = 5)
+parser.add_argument(
+	'--critp',
+	help = 'Significance threshold to use when comparing differences in bins: controls how stringent you want differences between groups to be. Default is 0.05/2 (boneferroni corrected)[Default: 0.025]',
+	required = False,
+	default = 0.025)
+parser.add_argument(
+	'--critpVar',
+	help = 'Significance threshold to use when comparing differences in variance within bins: controls how stringent you want bloom classifications to be. Lower p-value will mean more noclass and less bloom types. Default is 0.05 [Default: 0.05]',
+	required = False,
+	default = 0.05)	
 parser.add_argument(
 	'-R',
 	'--R_script',
@@ -674,24 +741,29 @@ parser.add_argument(
 	
 args = parser.parse_args()
 
-taxaTable = args.taxaTable
-metadata = args.metadata
+taxaTablePWD = args.taxaTable
+metadataPWD = args.metadata
 metadata_name = args.metadata_name
 gradient = args.gradient
-minA = args.minA
-maxB = args.maxB
-ABdiff = args.ABdiff
+minX = args.minX
+maxY = args.maxY
+XYdiff = args.XYdiff
 min_threshold_proportion = args.min_threshold_proportion
 min_threshold_constant = args.min_threshold_constant
 divisionSize = args.division_Size
 unitSize = args.unit_Size
 output_dir = args.output_dir
-allBins = args.allBins_SUPPRESS
-condensedBins = args.condensedBins_SUPPRESS
-checkClass = args.check_class
-checkValue = args.check_value
-tree = args.tree
+# allBins = args.allBins_SUPPRESS
+# condensedBins = args.condensedBins_SUPPRESS
+# checkClass = args.check_class
+# checkValue = args.check_value
 ubiqOverlapThresh = args.ubiq_overlap_threshold
+propUbiqNonzero = args.prop_ubiq_nonzero
+minCountTable = args.minCountTable
+minCountBin = args.minCountBin
+minCountOTUinSample = args.minCountOTUinSample
+critp = args.critp
+critpVar = args.critpVar
 R_script = args.R_script
 
 
@@ -707,43 +779,41 @@ Low = gradient[0]
 Inter = gradient[1]
 High = gradient[2]
 
-ABdiffunit = ABdiff*unitSize
+# unitSize is how big increments are; XYdiff is minimum distance between X and Y
+XYdiffunit = XYdiff*unitSize
 
+# Check if they want an even threshold or a proportional threshold for 'zero' observations when deciding between restricted or tolerant types
+if min_threshold_constant == None:
+	threshold = [True,min_threshold_proportion]
+else:
+	threshold = [False,min_threshold_constant]
+	
 # Make taxa summary using function
-taxasummariesRaw,taxaIDs = makeTaxaSummaries(taxaTable, metadata)
-taxasummaries = deleteLowAbund(taxasummariesRaw)
-# if type(taxasummaries.get('Unassigned;Other;Other;Other;Other;Other')) == list:
-# 	del taxasummaries['Unassigned;Other;Other;Other;Other;Other']
-# if type(taxasummaries.get('Unassigned')) == list:
-# 	del taxasummaries['Unassigned'] # FIX THIS
+taxasummariesRaw,taxaIDs = makeTaxaSummaries(taxaTablePWD, metadataPWD)
+taxasummaries = deleteLowAbund(taxasummariesRaw, minCountTable)
 	
 
 maxVal = max(taxasummaries[taxasummaries.keys()[1]][1])
 minVal = min(taxasummaries[taxasummaries.keys()[1]][1])
 
-if str(minA) == 'Check':
-	minA = int(minVal)
+if str(minX) == 'Check':
+	minX = math.floor(minVal)
 else:
-	minA = int(minA)
+	minX = minX
 	
-if str(maxB) == 'Check':
-	maxB = int(maxVal)
+if str(maxY) == 'Check':
+	maxY = math.ceil(maxVal)
 else:
-	maxB = int(maxB)
-
-
-# Check if they want an even threshold or a proportional threshold
-if min_threshold_constant == None:
-	threshold = [True,min_threshold_proportion]
-else:
-	threshold = [False,min_threshold_constant]
+	maxY = maxY
 
 #==========================================
-# Step two: Make data
+# Step two: Choose best fit model and assign specialist type
 
+# Make a list for storing warnings that come up during script
+warningsFile = {"MES_zero":{}, "Bestfit_ties":{}}
 
 # Dictionary that will have taxa as keys and a short list of paired [X,Y]
-bestfitAB = {}
+bestfitXY = {}
 taxaInfo = {}
 # modelDiffList = {}
 
@@ -753,96 +823,96 @@ print("PROGRESS")
 totalTaxa = len(taxasummaries.keys())
 for taxa in taxasummaries:
 	currentTaxa = taxasummaries.keys().index(taxa)
-	print("\r" + str(currentTaxa) + "/" + str(totalTaxa)),
+	# Print progress below
+	sys.stdout.write('\r')
+	sys.stdout.write("\r" + str(currentTaxa) + "/" + str(totalTaxa))
+	sys.stdout.flush()
 	currentbest = 0 # going to compare 1/n of error squared because I know it can't be lower than 0. Conversely, not sure what maximum of n will be.
 	modelDiffList = []
 	listAbund = taxasummaries[taxa]
-	for i in sequenceGenerator(minA,(maxB-ABdiffunit),unitSize):
-		X = i
-		for j in sequenceGenerator((X+ABdiffunit),maxB,unitSize):
-			Y = j
+	for X in sequenceGenerator(minX,(maxY-XYdiffunit),unitSize):
+		for Y in sequenceGenerator((X+XYdiffunit),maxY,unitSize):
 			binValues = sortBins(X,Y,listAbund)
-			if len(binValues['lista']) <= 3 or len(binValues['listb']) <= 3 or len(binValues['listc']) <= 3: # if the bins have nothing in them, then don't use that bin combination
+			if len(binValues['lista']) <= minCountBin or len(binValues['listb']) <= minCountBin or len(binValues['listc']) <= minCountBin: # if the bins have nothing in them, then don't use that bin combination
 				pass
 			else:
 				combined = makeAModel(X,Y,binValues)
 				MES = meanErrorSquared(combined)
 				if MES == 0: # If the meanErrorSquared is EXACTLY 0, there is probably something wrong, OR it is in such low abundance it's not worth lookinga t
-					print "MES IS ZERO"
+					print "WARNING: MES IS ZERO"
+					warningsFile['MES_zero'][taxa] = [X,Y]
 					pass
 				else:
 					invMES = 1/MES
-					modelDiffAsq = (average(binValues['lista']) - average(binValues['listb']))**2
-					modelDiffBsq = (average(binValues['listb']) - average(binValues['lista']))**2
-					modelDiff = (modelDiffAsq + modelDiffBsq)
+					modelDiffXsq = (average(binValues['lista']) - average(binValues['listb']))**2
+					modelDiffYsq = (average(binValues['listb']) - average(binValues['listc']))**2
+					modelDiff = (modelDiffXsq + modelDiffYsq)
 					if invMES > currentbest:
-						bestfitAB[taxa] = [[X,Y]]
+						bestfitXY[taxa] = [[X,Y]]
 						currentbest = invMES
 						modelDiffList = [modelDiff]
 					elif invMES == currentbest:
-						bestfitAB[taxa].append([X,Y])
-						modelDiffList.append([modelDiff])
-	firstBoundary = []
-	secondBoundary = []
-	for i in bestfitAB[taxa]:
-		firstBoundary.append(i[0])
-		secondBoundary.append(i[1])
-# 	overallDiff = []
-# 	for i in modelDiffList:
-# 		overallDiff.append(i)
-	maxDifferenceFoundPosition = [modelDiffList.index(i) for i in modelDiffList if i == max(modelDiffList)]
-	differencesA = numpy.diff(firstBoundary)
-	differencesB = numpy.diff(secondBoundary)
-	differencesAB = list(differencesA) + list(differencesB)
-	if len(maxDifferenceFoundPosition) > 1 and (True in [True for i in differencesAB if i > 1]): # If consecutive numbers AND same diff
-		print "WARNING: SAME MODELDIFF FOR IDENTICAL MODELS-Br"
-		print taxa
-		print firstBoundary
-		print secondBoundary
-	firstBoundaries = []
-	secondBoundaries = []
-	for i in maxDifferenceFoundPosition:
-		firstBoundaries.append(firstBoundary[i])
-		secondBoundaries.append(secondBoundary[i])
-	aveFirst = average(firstBoundaries)
-	aveSecond = average(secondBoundaries)
-	typeInfo = typeTaxa(aveFirst,aveSecond,listAbund) # type is going to be list of type and boundaries
-	taxaInfo[taxa] = typeInfo
-
+						bestfitXY[taxa].append([X,Y])
+						modelDiffList.append(modelDiff)
+	if len(bestfitXY[taxa]) == 1:
+		aveFirst = bestfitXY[taxa][0][0]
+		aveSecond = bestfitXY[taxa][0][1]
+	else:
+		firstBoundary = []
+		secondBoundary = []
+		for i in bestfitXY[taxa]:
+			firstBoundary.append(i[0])
+			secondBoundary.append(i[1])
+		maxDifferenceFoundPosition = [i for i in range(len(modelDiffList)) if modelDiffList[i] == max(modelDiffList)]
+		differencesX = numpy.diff(firstBoundary)
+		differencesY = numpy.diff(secondBoundary)
+		differencesXY = list(differencesX) + list(differencesY)
+		if len(maxDifferenceFoundPosition) > 1 and (True in [True for i in differencesXY if i > 1]): # If consecutive numbers AND same diff
+			print "WARNING: SAME MODELDIFF FOR IDENTICAL MODELS-Br"
+			print taxa, firstBoundary, secondBoundary
+			warningsFile['Bestfit_ties'][taxa] = [firstboundary,secondboundary]
+		firstBoundaries = []
+		secondBoundaries = []
+		for i in maxDifferenceFoundPosition:
+			firstBoundaries.append(firstBoundary[i])
+			secondBoundaries.append(secondBoundary[i])
+		aveFirst = average(firstBoundaries)
+		aveSecond = average(secondBoundaries)
+	taxaInfo[taxa] = typeTaxa(aveFirst,aveSecond,listAbund) # type is going to be list of type and boundaries
+	
 print("DONE ITERATIONS")
 transitions = summaryBoundaryTypes(taxaInfo) # list of all boundaries
 binRanges = sequenceGenerator(minVal,maxVal,divisionSize)
-# binCount, binRanges = binIt(maxVal,minVal,transitions,divisionSize) # input for histogram; don't actually need binCount but need binRanges
 
 #==========================================
 # DOUBLE CHECK FITS-- Make sure everything makes sense.
 
 # If flag that asks to do check is true, then proceed
-
-if checkClass:
-	# Percentile salinity values-- the values to check if data is behaving like it should
-	diffGrad = float(maxVal)-minVal
-	percentile = diffGrad*float(checkValue)
-	lwrPercentile = minVal + percentile
-	upprPercentile = maxVal - percentile
-	countNotValidated = 0
-	listNotValidated = []
-	for taxa in taxaInfo.keys():
-		# Calculate the percentile averages
-		binValues = sortBins(lwrPercentile, upprPercentile, taxasummaries[taxa])
-		meanA = average(binValues['lista'])	
-		meanB = average(binValues['listb'])
-		meanC = average(binValues['listc'])
-		# Determine the type the taxa SHOULD be
-		typeSimple = taxaInfo[taxa]['typeSimple'] 	
-		isValidate = validateTypeTest(typeSimple,meanA,meanB,meanC)		
-		if not isValidate:
-			print(taxa)
-			countNotValidated += 1
-			listNotValidated.append(taxa +" "+ taxaInfo[taxa]['type'] + " changed to noclass")
-			taxaInfo[taxa]['type'] = 'noclass'
-			taxaInfo[taxa]['typeSimple'] = 'noclass'
-			
+# 
+# if checkClass:
+# 	# Percentile salinity values-- the values to check if data is behaving like it should
+# 	diffGrad = float(maxVal)-minVal
+# 	percentile = diffGrad*float(checkValue)
+# 	lwrPercentile = minVal + percentile
+# 	upprPercentile = maxVal - percentile
+# 	countNotValidated = 0
+# 	listNotValidated = []
+# 	for taxa in taxaInfo.keys():
+# 		# Calculate the percentile averages
+# 		binValues = sortBins(lwrPercentile, upprPercentile, taxasummaries[taxa])
+# 		meanA = average(binValues['lista'])	
+# 		meanB = average(binValues['listb'])
+# 		meanC = average(binValues['listc'])
+# 		# Determine the type the taxa SHOULD be
+# 		typeSimple = taxaInfo[taxa]['typeSimple'] 	
+# 		isValidate = validateTypeTest(typeSimple,meanA,meanB,meanC)		
+# 		if not isValidate:
+# 			print(taxa)
+# 			countNotValidated += 1
+# 			listNotValidated.append(taxa +" "+ taxaInfo[taxa]['type'] + " changed to noclass")
+# 			taxaInfo[taxa]['type'] = 'noclass'
+# 			taxaInfo[taxa]['typeSimple'] = 'noclass'
+# 			
 			
 			
 #==========================================
@@ -851,47 +921,50 @@ if checkClass:
 # Make a file out of the taxasummaries file where you sum up the relative abundances at each salinity for each organism
 # maxValinity = max(binRanges)
 
-if allBins == True:
-	compositionAtGradAll = [0]*(len(binRanges)-1) # Empty matrix
-	for i in range(len(binRanges)-1): # For each bin
-		compositionAtGradAll[i] = compositionAtSalinity()
-		for x in taxasummaries: # For each taxa
-			type = taxaInfo[x]['type']
-			bloom = taxaInfo[x]['bloom']
-			for y in range(len(taxasummaries[x][1])): # Add the relative abundance to the class, "compositionAtSalinity"
-				if taxasummaries[x][1][y] >= binRanges[i] and taxasummaries[x][1][y] < binRanges[i+1]:
-					compositionAtGradAll[i].addValue(type,taxasummaries[x][0][y],bloom)
-	composition = [0]*len(compositionAtGradAll)
-	for i in range(len(compositionAtGradAll)):
-		composition[i] = compositionAtGradAll[i].reportComp() # Report the raw numbers for composition at each salinity
+compositionAtGradAll = [0]*(len(binRanges)-1) # Empty matrix
+for i in range(len(binRanges)-1): # For each bin
+	compositionAtGradAll[i] = compositionAtSalinity()
+	for x in taxasummaries: # For each taxa
+		type = taxaInfo[x]['type']
+		bloom = taxaInfo[x]['bloom']
+		for y in range(len(taxasummaries[x][1])): # Add the relative abundance to the class, "compositionAtSalinity"
+			if taxasummaries[x][1][y] >= binRanges[i] and taxasummaries[x][1][y] < binRanges[i+1]:
+				compositionAtGradAll[i].addValue(type,taxasummaries[x][0][y],bloom)
+composition = [0]*len(compositionAtGradAll)
+for i in range(len(compositionAtGradAll)):
+	composition[i] = compositionAtGradAll[i].reportComp() # Report the raw numbers for composition at each salinity
 
-if condensedBins == True:
-	compositionAtGradCondensed = [0]*(len(binRanges)-1) # Empty matrix
-	for i in range(len(binRanges)-1): # For each bin
-		compositionAtGradCondensed[i] = compositionAtSalinity()
-		for x in taxasummaries: # For each taxa
-			type = taxaInfo[x]['typeSimple']
-			bloom = taxaInfo[x]['bloom']
-			for y in range(len(taxasummaries[x][1])): # Add the relative abundance to the class, "compositionAtSalinity"
-				if taxasummaries[x][1][y] >= binRanges[i] and taxasummaries[x][1][y] < binRanges[i+1]:
-					compositionAtGradCondensed[i].addValue(type,taxasummaries[x][0][y],bloom)
-	compositionCondensed = [0]*len(compositionAtGradCondensed)
-	for i in range(len(compositionAtGradCondensed)):
-		compositionCondensed[i] = compositionAtGradCondensed[i].reportComp() # Report the raw numbers for composition at each salinity
+compositionAtGradCondensed = [0]*(len(binRanges)-1) # Empty matrix
+for i in range(len(binRanges)-1): # For each bin
+	compositionAtGradCondensed[i] = compositionAtSalinity()
+	for x in taxasummaries: # For each taxa
+		type = taxaInfo[x]['typeSimple']
+		bloom = taxaInfo[x]['bloom']
+		for y in range(len(taxasummaries[x][1])): # Add the relative abundance to the class, "compositionAtSalinity"
+			if taxasummaries[x][1][y] >= binRanges[i] and taxasummaries[x][1][y] < binRanges[i+1]:
+				compositionAtGradCondensed[i].addValue(type,taxasummaries[x][0][y],bloom)
+compositionCondensed = [0]*len(compositionAtGradCondensed)
+for i in range(len(compositionAtGradCondensed)):
+	compositionCondensed[i] = compositionAtGradCondensed[i].reportComp() # Report the raw numbers for composition at each salinity
 
 			
 #==========================================
 # Making OTU presence/absence table
 
+# allTypes = []
+# for i in taxaInfo:
+# 	if taxaInfo[i]['type'] == 'noclass':
+# 		if taxaInfo[i]['bloom'] == 'No':
+# 			allTypes.append('noclass')
+# 		else:
+# 			allTypes.append(taxaInfo[i]['bloom']+'bloom')
+# 	else:
+# 		allTypes.append(taxaInfo[i]['type'])
+# allTypesUnique = list(set(allTypes))
+
 allTypes = []
 for i in taxaInfo:
-	if taxaInfo[i]['type'] == 'noclass':
-		if taxaInfo[i]['bloom'] == 'No':
-			allTypes.append('noclass')
-		else:
-			allTypes.append(taxaInfo[i]['bloom'])
-	else:
-		allTypes.append(taxaInfo[i]['type'])
+	allTypes.append(taxaInfo[i]['type'])
 allTypesUnique = list(set(allTypes))
 
 OTUtableByType = {}
@@ -916,55 +989,55 @@ for type in allTypesUnique:
 
 # combined = result from makeAModel
 # transitions = list of all boundaries; can do histogram with output
-# bestfitAB = dictionary, where indices are 'taxa' and then it lists their boundaries
+# bestfitXY = dictionary, where indices are 'taxa' and then it lists their boundaries
 # listAbund = [abundance,salinity]
 print "Printing and saving..."
 
 os.system('mkdir ' + output_dir)
 os.chdir(output_dir)
 
-if allBins == True:
-	typeAbundance = open('types_across_gradient_all.txt', 'wr')
-	toWrite = 'Gradient' + '\t'
-	for i in range(len(binRanges)-1):
-		toWrite += str(binRanges[i+1]) + '\t'
+# write 'all' version
+typeAbundanceAll = open('types_across_gradient_all.txt', 'wr')
+toWrite = 'Gradient' + '\t'
+for i in range(len(binRanges)-1):
+	toWrite += str(binRanges[i+1]) + '\t'
+toWrite = toWrite.strip()
+toWrite += '\r'
+typeAbundanceAll.write(toWrite)
+categories = [Low+"Restricted",Low+"Bloom",Low + "Peak",Inter+"PeakLoToler",Inter+"Restricted",Inter+"Bloom",Inter+"Peak",Inter+"PeakHiToler",High+"Peak",High+"Restricted",High+"Bloom",'noclass','ubiquitous','inv'+Inter]
+for i in range(len(categories)):
+	toWrite = categories[i] + '\t'
+	for j in composition:
+		if j == 'Pass':
+			toWrite += '\t'
+		else:
+			toWrite += str(j[i]) + '\t'
 	toWrite = toWrite.strip()
 	toWrite += '\r'
-	typeAbundance.write(toWrite)
-	categories = [Low+"Restricted",Low+"Bloom",Low + "Peak",Inter+"PeakLoToler",Inter+"Restricted",Inter+"Bloom",Inter+"Peak",Inter+"PeakHiToler",High+"Peak",High+"Restricted",High+"Bloom",'noclass','ubiquitous','inv'+Inter]
-	for i in range(len(categories)):
-		toWrite = categories[i] + '\t'
-		for j in composition:
-			if j == 'Pass':
-				toWrite += '\t'
-			else:
-				toWrite += str(j[i]) + '\t'
-		toWrite = toWrite.strip()
-		toWrite += '\r'
-		typeAbundance.write(toWrite)
-	typeAbundance.close()
+	typeAbundanceAll.write(toWrite)
+typeAbundanceAll.close()
 
-if condensedBins == True: # TESTING
-	typeAbundance = open('types_across_gradient_condensed.txt', 'wr')
-	toWrite = 'Gradient' + '\t'
-	for i in range(len(binRanges)-1):
-		toWrite += str(binRanges[i+1]) + '\t'
+# write 'condensed' version
+typeAbundance = open('types_across_gradient_condensed.txt', 'wr')
+toWrite = 'Gradient' + '\t'
+for i in range(len(binRanges)-1):
+	toWrite += str(binRanges[i+1]) + '\t'
+toWrite = toWrite.strip()
+toWrite += '\r'
+typeAbundance.write(toWrite)
+categories = [Low+"Restricted",Low+"Bloom",Low + "Peak",Inter+"PeakLoToler",Inter+"Restricted",Inter+"Bloom",Inter+"Peak",Inter+"PeakHiToler",High+"Peak",High+"Restricted",High+"Bloom",'noclass','ubiquitous','inv'+Inter]
+positionCategories = [0,4,9,11]
+for i in positionCategories:
+	toWrite = categories[i] + '\t'
+	for j in compositionCondensed:
+		if j == 'Pass':
+			toWrite += '\t'
+		else:
+			toWrite += str(j[i]) + '\t'
 	toWrite = toWrite.strip()
 	toWrite += '\r'
 	typeAbundance.write(toWrite)
-	categories = [Low+"Restricted",Low+"Bloom",Low + "Peak",Inter+"PeakLoToler",Inter+"Restricted",Inter+"Bloom",Inter+"Peak",Inter+"PeakHiToler",High+"Peak",High+"Restricted",High+"Bloom",'noclass','ubiquitous','inv'+Inter]
-	positionCategories = [0,4,9,11]
-	for i in positionCategories:
-		toWrite = categories[i] + '\t'
-		for j in compositionCondensed:
-			if j == 'Pass':
-				toWrite += '\t'
-			else:
-				toWrite += str(j[i]) + '\t'
-		toWrite = toWrite.strip()
-		toWrite += '\r'
-		typeAbundance.write(toWrite)
-	typeAbundance.close()
+typeAbundance.close()
 	
 
 taxaFile = open('taxa_abundances_across_gradient.txt', 'wr')
@@ -1044,7 +1117,7 @@ OTUtabletoPrint.close()
 
 uniqueListOfOTUs = open('OTUs.txt','w')
 toPrint = ''
-OTUs = set(uniqueOTUList)
+# OTUs = set(uniqueOTUList)
 for taxa in taxaInfo:
 	toPrint += str(taxa) + '\r'
 toPrint = toPrint.strip()
@@ -1059,22 +1132,31 @@ LOG = open("LOG.txt", 'wr')
 LOG.write(output_dir + '\n')
 # if notes == True:
 # 	LOG.write(raw_input("Type short description or comment, then press enter:\n") + '\n')
-LOG.write("Settings: \n"+ "minA =" + str(minA) + "\nmaxB =" + str(maxB) + "\nABdiff =" + str(ABdiff) + "\nminVal =" + str(minVal) + "\nmaxVal =" + str(maxVal) + "\nDivSize =" + str(divisionSize) + "\nunitSize = " + str(unitSize))
-LOG.write("\nthreshold =" + str(min_threshold_proportion))
-LOG.write("\nFull PWD: \ntaxasummaries = " + taxaTable + "\nmetadata = " + metadata + "\ntree = " + tree)
+LOG.write("Settings: \n"+ "minX ="+ str(minX) + "\nmaxY =" + str(maxY) + "\nXYdiff =" + str(XYdiff) +  "\nDivSize =" + str(divisionSize) + "\nunitSize = " + str(unitSize))
+thresholdType = 'Proportion'
+if not threshold[0] :
+	thresholdType = 'Constant'
+LOG.write("\nthreshold type: " + thresholdType + "\nthreshold: " + str(threshold[1]))
+LOG.write("\nFull PWD: \ntaxasummaries = " + taxaTablePWD + "\nmetadata = " + metadataPWD )
 LOG.write("\nLow: "+ Low)
 LOG.write("\nInter: "+ Inter)
 LOG.write("\nHigh: "+ High)
 LOG.write("\nGradient Header: "+ metadata_name)
-LOG.write("\nallBins,condensedBins: "+ str(allBins) + ","+ str(condensedBins))
 LOG.write("\nUbiquitous taxa overlap threshold: " + str(ubiqOverlapThresh))
-if checkClass:
-	LOG.write("\nDiscard Class threshold: " + str(checkValue))
-	LOG.write("\nDiscarded Classifications: " + str(countNotValidated))
-	LOG.write("\nIDs of Discarded Classifications: ")
-	for ID in range(1,len(listNotValidated)):
-		LOG.write("\n" + str(listNotValidated[ID]))
+LOG.write("\nProportion overlap needed between groups to be ubiquitous: " + str(propUbiqNonzero))
+LOG.write("\nFiltering; number of OTUs in sample to not be re-set to zero: " + str(minCountOTUinSample))
+LOG.write("\nFiltering; number of reads of an OTU per sample for that OTU to be kept: " + str(minCountTable))
+LOG.write("\nMinimum number of samples in bin: " + str(minCountBin))
+LOG.write("\nCritical p-value to compare means of two bins: " + str(critp))
+LOG.write("\nCritical p-value to compare variances when assigning bloom types: " + str(critpVar))
+# if checkClass:
+# 	LOG.write("\nDiscard Class threshold: " + str(checkValue))
+# 	LOG.write("\nDiscarded Classifications: " + str(countNotValidated))
+# 	LOG.write("\nIDs of Discarded Classifications: ")
+# 	for ID in range(1,len(listNotValidated)):
+# 		LOG.write("\n" + str(listNotValidated[ID]))
 LOG.close()
+
 
 #==========================================
 # Step five: Draw the histogram and the other graphs
