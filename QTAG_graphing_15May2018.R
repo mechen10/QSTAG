@@ -42,7 +42,19 @@ typetablePWD = opt$OTUTable
 
 
 ########################## For Testing ####################################
-# setwd('/Users/melissachen/Documents/Masters/Project_Environmental/FromBotaClust_1feb2018/SALBIN_7June2018_vsearch_silva128/16sBALTIC_7june2018')
+# setwd('/Users/melissachen/Documents/Masters/Project_Environmental/FromBotaClust_1feb2018/SALBIN_7June2018_vsearch_silva132/16sBALTIC_7june2018')
+# wd <- getwd()
+# boundariesPWD = unlist(paste0(wd, "/boundaries.txt"))
+# modelboundariesPWD = paste0(wd, "/modelBoundaries_type.txt")
+# taxaAbundPWD = paste0(wd, "/taxa_abundances_across_gradient.txt")
+# typesPWD = paste0(wd, "/types_across_gradient")
+# gradientNamesPWD = paste0(wd, "/gradient.txt")
+# biomPWD = paste0(wd, "/OTUTableText.txt")
+# minthreshold = 0.05
+# LOGPWD = paste0(wd, "/LOG.txt")
+# typetablePWD = paste0(wd, "/OTUTablebyType.txt")
+# 
+# setwd('/Users/melissachen/Documents/Masters/Project_Environmental/FromBotaClust_1feb2018/SALBIN_7June2018_vsearch_silva132/16sFRASER_7june2018')
 # wd <- getwd()
 # boundariesPWD = unlist(paste0(wd, "/boundaries.txt"))
 # modelboundariesPWD = paste0(wd, "/modelBoundaries_type.txt")
@@ -54,20 +66,8 @@ typetablePWD = opt$OTUTable
 # LOGPWD = paste0(wd, "/LOG.txt")
 # typetablePWD = paste0(wd, "/OTUTablebyType.txt")
 
-# setwd('/Users/melissachen/Documents/Masters/Project_Environmental/FromBotaClust_1feb2018/SALBIN_7June2018_vsearch_silva128/16sFRASER_7june2018')
-# wd <- getwd()
-# boundariesPWD = unlist(paste0(wd, "/boundaries.txt"))
-# modelboundariesPWD = paste0(wd, "/modelBoundaries_type.txt")
-# taxaAbundPWD = paste0(wd, "/taxa_abundances_across_gradient.txt")
-# typesPWD = paste0(wd, "/types_across_gradient")
-# gradientNamesPWD = paste0(wd, "/gradient.txt")
-# biomPWD = paste0(wd, "/OTUTableText.txt")
-# minthreshold = 0.05
-# LOGPWD = paste0(wd, "/LOG.txt")
-# typetablePWD = paste0(wd, "/OTUTablebyType.txt")
-#
 # 
-# setwd('/Users/melissachen/Documents/Masters/Project_Environmental/FromBotaClust_1feb2018/SALBIN_7June2018_vsearch_silva128/18sFraser_7june2018')
+# setwd('/Users/melissachen/Documents/Masters/Project_Environmental/FromBotaClust_1feb2018/SALBIN_7June2018_vsearch_silva132/18sFraser_7june2018')
 # wd <- getwd()
 # boundariesPWD = unlist(paste0(wd, "/boundaries.txt"))
 # modelboundariesPWD = paste0(wd, "/modelBoundaries_type.txt")
@@ -757,8 +757,8 @@ dev.off()
 ########################## TAXASUMMARIES SECTION ####################################
 print("In taxa summaries section")
 
-library(outliers)
-library(stats)
+# library(outliers)
+# library(stats)
 output <- "TaxaSummaries"
 
 system(paste0("mkdir ",output))
@@ -770,7 +770,8 @@ taxa <- read.delim(paste0(biomPWD)
                    , stringsAsFactors = FALSE
                    , header = TRUE
                    , row.names = 1
-                   , skip = 1)
+                   # , skip = 1
+                   )
 colnames(taxa) <- gsub(".","-", colnames(taxa), fixed = TRUE)
 
 # # Order by abundance
@@ -1118,7 +1119,7 @@ for ( level in 3:5) {
         row <- rowsNeedColors[r]
         colorsGroup[row] <- getColors[r]
     }
-
+    
     pdf(paste0("./",output,"/TaxaSummariesPartitioned_by",levelNames[level],".pdf"), width = 10, height = 5)
     # quartz(,10,5)
     par(mar=c(5.1,4.1,3,1), xpd=TRUE)

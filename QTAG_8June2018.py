@@ -79,6 +79,7 @@ import os
 import subprocess
 from time import sleep
 import sys
+import copy # to copy lists and dictionaries
 
 #==========================================
 
@@ -98,13 +99,15 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 		# 		Taxonomies are taken from the observation metadata from the OTU table
 	global metadata_name # This is the header name in the metadata file of the values to be assessed
 	global minCountOTUinSample
+	global minCountTable
 	print "Making and loading taxa table and metadata table..."
-	os.system('biom convert -i ' + taxaTablePWD + ' --to-tsv --header-key taxonomy --table-type="OTU table" -o ./OTUTableText.txt') # This is done in BASH
-	taxaOpen = open('./OTUTableText.txt', 'rU') 
+	os.system('biom convert -i ' + taxaTablePWD + ' --to-tsv --header-key taxonomy --table-type="OTU table" -o ./OTUTableText_temp.txt') # This is done in BASH
+	taxaOpen = open('./OTUTableText_temp.txt', 'rU') 
 	taxaOpenTemp = []
 	for i in taxaOpen:	# Read each line and concatenate into single file
 		taxaOpenTemp += [i] # A single string; OTU table should be Unix(LF) format (\n at ends)
 	taxaOpen.close()
+	os.system('rm ./OTUTableText_temp.txt')
 	tempList =[]
 	for j in taxaOpenTemp: # Each line split by "\n"
 		tempLine = j.strip()
@@ -128,6 +131,8 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 						taxaCountsTemp[str(x)] += float(y[x])
 			first = False
 		# Output of this loop is taxaCountsTemp (a dictionary of abundance data), taxaIDs, and sites
+	headers = sites[:]
+	##### START EDITING HERE######
 	taxaTable = {}
 	for i in range(len(tempList)):
 		taxaTable[tempList[i][0]] = [[]] # Make empty list of lists for each OTU ID
@@ -136,12 +141,27 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 		else:
 			for j in range(1,len(tempList[i])-1):
 				# Sum of all abundances to make relative abundances
-				sumAbund = int(taxaCountsTemp[str(j)])
+	# 				sumAbund = int(taxaCountsTemp[str(j)])
 				value = float(tempList[i][j])
 				if value < minCountOTUinSample:
 					value = 0.0	
-				taxaTable[tempList[i][0]][0].append(value/float(sumAbund))
+				taxaTable[tempList[i][0]][0].append(value)
 				# Save values as relative abundances instead of absolute ones
+	# Now get rid of low abundance in table
+	taxaTableFilt = deleteLowAbund(taxaTable,minCountTable)
+	# Get total counts
+	totalCounts = [ 0 for i in range(len(sites))]
+	for i in range(len(sites)):
+		for taxa in taxaTableFilt:
+			totalCounts[i] += taxaTableFilt[taxa][0][i]
+	# Convert to relative abundance
+	taxaTableFinal =copy.deepcopy(taxaTableFilt)
+	for OTU in taxaTableFilt.keys():
+		tempOTUlist = [0 for i in range(len(sites))]
+		for i in range(len(sites)):
+			tempOTUlist[i] = float(taxaTableFilt[OTU][0][i])/float(totalCounts[i])
+		taxaTableFinal[OTU][0] = tempOTUlist		
+	##### STOP EDITING HERE######
 	metadataOpen = open(metadataPWD, 'rU')
 	metadataOpenTemp = []
 	for i in metadataOpen:
@@ -159,26 +179,25 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 	for site in metadata:
 		sites = [site[1] if x == site[0] else x for x in sites]
 	# Make proper format, but with site names instead of numbers
-	for taxa in taxaTable:
-		taxaTable[taxa].append(sites)
+	for taxa in taxaTableFinal:
+		taxaTableFinal[taxa].append(sites)
 	# Make abundance values integer as well
-	for x in taxaTable:
-		taxaTable[x] = [[float(strings) for strings in keys] for keys in taxaTable[x]]
-	os.system('rm ./OTUTableText.txt')
-	return taxaTable,taxaIDs
+	for x in taxaTableFinal:
+		taxaTableFinal[x] = [[float(strings) for strings in keys] for keys in taxaTableFinal[x]]
+	printOTUTable(taxaTableFilt,headers,taxaIDs)
+	return taxaTableFinal,taxaIDs
 
 #==========================================
 # Delete certain taxa based on total abundance; must be sufficiently abundant in order to work
 
-def deleteLowAbund(taxasummary,minCount): # Change to absolute threshold, or get rid of entirely. Get rid of show ups in < 3 samples
+def deleteLowAbund(taxaTable,minCountTable): # Change to absolute threshold, or get rid of entirely. Get rid of show ups in < 3 samples
 	newTaxaSummary = {}
-	for taxa in taxasummary:
+	for taxa in taxaTable:
 		nonzeroCount = 0
-		for i in taxasummary[taxa][0]:
-			if i > 0.0:
-				nonzeroCount += 1
-		if nonzeroCount >= minCount:
-			newTaxaSummary[taxa] = taxasummary[taxa]
+		for i in taxaTable[taxa][0]:
+			nonzeroCount += i
+		if int(nonzeroCount) >= int(minCountTable):
+			newTaxaSummary[taxa] = taxaTable[taxa]
 	return newTaxaSummary
 
 #==========================================
@@ -199,22 +218,39 @@ def is_numeric(s): # Is it a number
 	except ValueError:
 		return False
 		
-def printOTUTable(OTUTable, taxaIDs, output):
-	# Print OTU table
-	first = True
-	toWrite = "#OTU ID"
-	for row in OTUTable:
-		if first:
-			for sample in OTUTable[row].keys():
-				toWrite += "\t" + sample 
-			toWrite += "\t"+ "taxonomy" + "\n"
-			first = False
-		toWrite += row
-		for abund in OTUTable[row]:
-			toWrite += "\t" + str(OTUTable[row][abund])
-		toWrite += "\t" + taxaIDs[row] + "\n"
-	open(output+".txt", 'w').write(toWrite)
-	print("DONE PRINTING OTU TABLE")
+def printOTUTable(taxaTableFilt,headers,taxaIDs):
+	OTUtabletoPrint = open('OTUTableText.txt','w')
+	toPrint = '#OTUID'
+	for head in headers:
+		toPrint += '\t' + head
+	toPrint += '\t'+'taxonomy'+'\r'
+	for taxa in taxaTableFilt:
+		toPrint += taxa
+		for val in taxaTableFilt[taxa][0]:
+			toPrint += '\t' + str(val)
+		toPrint += '\t' + taxaIDs[taxa]
+		toPrint += '\r'
+	OTUtabletoPrint.write(toPrint)
+	OTUtabletoPrint.close()
+	os.system('biom convert -i OTUTableText.txt --to-hdf5 --table-type="OTU table" --process-obs-metadata taxonomy -o OTUTable_filtered.biom')
+	print("Printed OTU table")
+		
+# def printOTUTable(OTUTable, taxaIDs, output): # OLD VERSION, BEFORE I MADE ADJUSTMENTS
+# 	# Print OTU table
+# 	first = True
+# 	toWrite = "#OTU ID"
+# 	for row in OTUTable:
+# 		if first:
+# 			for sample in OTUTable[row].keys():
+# 				toWrite += "\t" + sample 
+# 			toWrite += "\t"+ "taxonomy" + "\n"
+# 			first = False
+# 		toWrite += row
+# 		for abund in OTUTable[row]:
+# 			toWrite += "\t" + str(OTUTable[row][abund])
+# 		toWrite += "\t" + taxaIDs[row] + "\n"
+# 	open(output+".txt", 'w').write(toWrite)
+# 	print("DONE PRINTING OTU TABLE")
 		
 #==========================================
 # MAKING BINS FOR EACH SET OF BOUNDARIES-- USED BELOW
@@ -728,9 +764,9 @@ parser.add_argument(
 	default = 0.30)
 parser.add_argument(
 	'--minCountTable',
-	help = 'Minimum number of reads found in entire OTU table for an OTU to be kept. [Default: 3]',
+	help = 'Minimum number of reads found in entire OTU table for an OTU to be kept. [Default: 10]',
 	required = False,
-	default = 5)
+	default = 10)
 parser.add_argument(
 	'--minCountBin',
 	help = 'Minimum number of OTUs in each bin (A, B, C) in order for that bin combination to be valid. (Equal or greater than minCountBin) [Default: 3]',
@@ -808,9 +844,7 @@ else:
 	threshold = [False,min_threshold_constant]
 	
 # Make taxa summary using function
-taxasummariesRaw,taxaIDs = makeTaxaSummaries(taxaTablePWD, metadataPWD)
-taxasummaries = deleteLowAbund(taxasummariesRaw, minCountTable)
-	
+taxasummaries,taxaIDs = makeTaxaSummaries(taxaTablePWD, metadataPWD)	
 
 maxVal = max(taxasummaries[taxasummaries.keys()[1]][1])
 minVal = min(taxasummaries[taxasummaries.keys()[1]][1])
@@ -842,10 +876,6 @@ print("PROGRESS")
 totalTaxa = len(taxasummaries.keys())
 for taxa in taxasummaries:
 	currentTaxa = taxasummaries.keys().index(taxa)
-	# Print progress below
-	sys.stdout.write('\r')
-	sys.stdout.write("\r" + str(currentTaxa) + "/" + str(totalTaxa))
-	sys.stdout.flush()
 	currentbest = 0 # going to compare 1/n of error squared because I know it can't be lower than 0. Conversely, not sure what maximum of n will be.
 	modelDiffList = []
 	listAbund = taxasummaries[taxa]
@@ -887,9 +917,9 @@ for taxa in taxasummaries:
 		differencesY = numpy.diff(secondBoundary)
 		differencesXY = list(differencesX) + list(differencesY)
 		if len(maxDifferenceFoundPosition) > 1 and (True in [True for i in differencesXY if i > 1]): # If consecutive numbers AND same diff
-			print "WARNING: SAME MODELDIFF FOR IDENTICAL MODELS-Br"
+			print "WARNING: SAME MODELDIFF FOR IDENTICAL MODELS"
 			print taxa, firstBoundary, secondBoundary
-			warningsFile['Bestfit_ties'][taxa] = [firstboundary,secondboundary]
+			warningsFile['Bestfit_ties'][taxa] = [firstBoundary,secondBoundary]
 		firstBoundaries = []
 		secondBoundaries = []
 		for i in maxDifferenceFoundPosition:
@@ -898,6 +928,10 @@ for taxa in taxasummaries:
 		aveFirst = average(firstBoundaries)
 		aveSecond = average(secondBoundaries)
 	taxaInfo[taxa] = typeTaxa(aveFirst,aveSecond,listAbund) # type is going to be list of type and boundaries
+	# Print progress below
+	sys.stdout.write('\r')
+	sys.stdout.write("\r" + str(currentTaxa+1) + "/" + str(totalTaxa))
+	sys.stdout.flush()
 	
 print("DONE ITERATIONS")
 transitions = summaryBoundaryTypes(taxaInfo) # list of all boundaries
@@ -1145,7 +1179,17 @@ uniqueListOfOTUs.close()
 
 # os.system('mv ../LOG.txt ./')
 os.system('mv ../OTUTableText.txt ./')
+os.system('mv ../OTUTable_filtered.biom ./')
 
+# Print warnings file
+toPrint='OTU\tMessage\r'
+for otu in warningsFile['Bestfit_ties']:
+	toPrint += otu + '\t' + str(warningsFile['Bestfit_ties'][otu]) + '\t WARNING: SAME MODELDIFF FOR IDENTICAL MODELS \r'
+for otu in warningsFile['MES_zero']:
+	toPrint += otu + '\t' + str(warningsFile['MES_zero'][otu]) + '\t WARNING: MES is zero \r'
+WARNINGS = open("warnings.txt",'w')
+WARNINGS.write(toPrint)
+WARNINGS.close()
 
 # PRINTING LOG
 LOG = open("LOG.txt", 'wr')
