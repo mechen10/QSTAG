@@ -1,0 +1,1 @@
+#OTUTable 	OTU8	OTU9	OTU6	OTU7	OTU4	OTU5	OTU2	OTU3	OTU1HighRestricted	0	0	0	0	0	0	0	0	1ubiquitous	0	1	0	0	0	1	0	0	0HighPeak	0	0	0	0	1	0	0	0	0InterPeakHiToler	0	0	1	0	0	0	0	0	0InterPeakLoToler	0	0	0	1	0	0	0	0	0LowPeak	0	0	0	0	0	0	1	0	0LowRestricted	0	0	0	0	0	0	0	1	0InterRestricted	1	0	0	0	0	0	0	0	0

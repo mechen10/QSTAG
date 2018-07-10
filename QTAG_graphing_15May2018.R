@@ -95,6 +95,7 @@ maxGrad <- as.character(logvalues[grep("maxY", logvalues$V1),])
 maxGrad <- ceiling(as.numeric(gsub("maxY =","", maxGrad)))
 metadataPWD <- as.character(logvalues[grep("metadata", logvalues$V1),])
 metadataPWD <- gsub("metadata = ","",metadataPWD)
+
 threshold <- as.character(logvalues[grep("^threshold:", logvalues$V1),])
 threshold <- as.numeric(gsub("threshold:", "", threshold))
 
@@ -815,9 +816,8 @@ metadata <- read.delim(paste0(metadataPWD), stringsAsFactors = FALSE, strip.whit
 rownames(metadata) <- gsub(".","-",rownames(metadata), fixed = TRUE)
 
 # Make sure only samples in metadata are ones in taxa summaries
-metadata <- metadata[rownames(metadata) %in% names(taxaAbund),]
+metadata <- metadata[which(rownames(metadata) %in% names(taxaAbund)),]
 
-# Sort taxa summaries sites and metadata so they are increasing in gradient
 # Use re-order with gradientNames[4] to make in order of gradient
 metadata <- metadata[order(as.numeric(metadata[[paste0(gradientNames[4])]])),]
 # then make taxa the same

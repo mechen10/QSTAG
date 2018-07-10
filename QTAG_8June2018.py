@@ -3,7 +3,7 @@
 #==========================================
 # QUANTIFICATION OF TURNOVER ALONG GRADIENTS
 # By Melissa Chen
-# Version 15-May-2018
+# Version 08-June-2018
 # Built under python 2.7.11
 # April 10th, 2017
 #==========================================
@@ -27,6 +27,7 @@
 # tried using man whitney U test for means comparisons instead, since the data is very non-parametric. Seems to have more power this way; less things are classified as "noclass"
 # sometimes manwhitney U test is too sensitive, esp during zero-inflated groups. So changed the requirements so that difference of means must be sig AND one of them must be greater than thresh
 # Changed OTUTabletext.txt into the "after" OTU table, not before.Delete original text one
+# Edited loading of OTU table so you *could* use non-qiime formats
 ######
 
 # This script takes an OTU table (output from QIIME) and mappingfile with salinity (QIIME-compatible) and produces the following text outputs:
@@ -101,13 +102,17 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 	global minCountOTUinSample
 	global minCountTable
 	print "Making and loading taxa table and metadata table..."
-	os.system('biom convert -i ' + taxaTablePWD + ' --to-tsv --header-key taxonomy --table-type="OTU table" -o ./OTUTableText_temp.txt') # This is done in BASH
-	taxaOpen = open('./OTUTableText_temp.txt', 'rU') 
+	if '.biom' in taxaTablePWD:
+		os.system('biom convert -i ' + taxaTablePWD + ' --to-tsv --header-key taxonomy --table-type="OTU table" -o ./OTUTableText_temp.txt') # This is done in BASH
+		taxaOpen = open('./OTUTableText_temp.txt', 'rU') 
+	else:
+		taxaOpen = open(taxaTablePWD, 'rU')
 	taxaOpenTemp = []
 	for i in taxaOpen:	# Read each line and concatenate into single file
 		taxaOpenTemp += [i] # A single string; OTU table should be Unix(LF) format (\n at ends)
 	taxaOpen.close()
-	os.system('rm ./OTUTableText_temp.txt')
+	if '.biom' in taxaTablePWD:
+		os.system('rm ./OTUTableText_temp.txt')
 	tempList =[]
 	for j in taxaOpenTemp: # Each line split by "\n"
 		tempLine = j.strip()
@@ -132,7 +137,6 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 			first = False
 		# Output of this loop is taxaCountsTemp (a dictionary of abundance data), taxaIDs, and sites
 	headers = sites[:]
-	##### START EDITING HERE######
 	taxaTable = {}
 	for i in range(len(tempList)):
 		taxaTable[tempList[i][0]] = [[]] # Make empty list of lists for each OTU ID
@@ -143,7 +147,7 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 				# Sum of all abundances to make relative abundances
 	# 				sumAbund = int(taxaCountsTemp[str(j)])
 				value = float(tempList[i][j])
-				if value < minCountOTUinSample:
+				if value < float(minCountOTUinSample):
 					value = 0.0	
 				taxaTable[tempList[i][0]][0].append(value)
 				# Save values as relative abundances instead of absolute ones
@@ -161,7 +165,6 @@ def makeTaxaSummaries(taxaTablePWD,metadataPWD):
 		for i in range(len(sites)):
 			tempOTUlist[i] = float(taxaTableFilt[OTU][0][i])/float(totalCounts[i])
 		taxaTableFinal[OTU][0] = tempOTUlist		
-	##### STOP EDITING HERE######
 	metadataOpen = open(metadataPWD, 'rU')
 	metadataOpenTemp = []
 	for i in metadataOpen:
@@ -400,7 +403,7 @@ def typeTaxa(X, Y, listAbund): # Uses Welch's t-test and bins above to classify 
 			elif meanA > thresh and meanC <= thresh: # leaning towards being lo
 				typeOutput['type'] = Inter+'PeakLoToler'
 			else: # both meanA and meanC are larger than 0
-				typeOutput['type'] = Inter+'PeakAllToler'
+				typeOutput['type'] = Inter+'Peak'
 		elif meanB < meanA and meanB < meanC and meanA > thresh and meanC > thresh: # inv-inter water-- shouldn't exist according to hypothesis, but I put it in as a fail-safe
 			isInter = True
 			typeOutput['type'] = 'inv'+Inter
@@ -668,7 +671,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
 	'-t',
 	'--taxaTable',
-	help = "Taxa table file from QIIME-- biom format",
+	help = "Taxa table file from QIIME-- biom format. OR you can also use a text file, but the header for OTUs must be '#OTU ID'",
 	required = True,)
 parser.add_argument(
 	'-m',
@@ -802,23 +805,23 @@ metadata_name = args.metadata_name
 gradient = args.gradient
 minX = args.minX
 maxY = args.maxY
-XYdiff = args.XYdiff
-min_threshold_proportion = args.min_threshold_proportion
+XYdiff = float(args.XYdiff)
+min_threshold_proportion = float(args.min_threshold_proportion)
 min_threshold_constant = args.min_threshold_constant
-divisionSize = args.division_Size
-unitSize = args.unit_Size
+divisionSize = float(args.division_Size)
+unitSize = float(args.unit_Size)
 output_dir = args.output_dir
 # allBins = args.allBins_SUPPRESS
 # condensedBins = args.condensedBins_SUPPRESS
 # checkClass = args.check_class
 # checkValue = args.check_value
-ubiqOverlapThresh = args.ubiq_overlap_threshold
-propUbiqNonzero = args.prop_ubiq_nonzero
-minCountTable = args.minCountTable
-minCountBin = args.minCountBin
-minCountOTUinSample = args.minCountOTUinSample
-critp = args.critp
-critpVar = args.critpVar
+ubiqOverlapThresh = float(args.ubiq_overlap_threshold)
+propUbiqNonzero = float(args.prop_ubiq_nonzero)
+minCountTable = int(args.minCountTable)
+minCountBin = int(args.minCountBin)
+minCountOTUinSample = int(args.minCountOTUinSample)
+critp = float(args.critp)
+critpVar = float(args.critpVar)
 R_script = args.R_script
 
 
@@ -835,7 +838,7 @@ Inter = gradient[1]
 High = gradient[2]
 
 # unitSize is how big increments are; XYdiff is minimum distance between X and Y
-XYdiffunit = XYdiff*unitSize
+XYdiffunit = float(XYdiff)*float(unitSize)
 
 # Check if they want an even threshold or a proportional threshold for 'zero' observations when deciding between restricted or tolerant types
 if min_threshold_constant == None:
@@ -858,7 +861,7 @@ if str(maxY) == 'Check':
 	maxY = math.ceil(maxVal)
 else:
 	maxY = maxY
-
+	
 #==========================================
 # Step two: Choose best fit model and assign specialist type
 

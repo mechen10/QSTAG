@@ -1,0 +1,97 @@
+##### Instructions for using QTAG
+
+# Script file names:
+QTAG: QTAG_8June2018.py
+Plotting in R Script: QTAG_graphing_generic_10July2018.R
+
+#### QTAG REQUIREMENTS ####
+- An OTU Table (from QIIME works best, but in theory any table with the following will work):
+	- Table may have lines that include extra information at top
+	- BUT the first line of the table itself MUST begin with '#OTU ID' (see example table)
+	- OTU table can be in text format OR biom format, but if it's text format it must end in '.txt' and if biom, it must end in '.biom'
+	
+- A metadata file with a factors as columns and samples as rows
+	- first row MUST be headers of factors (ie, "Salinity","Temperature", etc)
+	- MUST have at least 2 columns; sampleIDs, gradient, description
+	
+- Python 2.7.11
+
+- *** ALREADY HAVE MACQIIME RUNNING **** This is important if you are using a biom table since it uses biom convert to make the biom table into a text table.
+
+- If you also want to run the R script (that generates preliminary figures; QTAG_graphing_generic_10July2018.R), you also need the following QIIME packages:
+	- optparse
+	
+	
+	
+	
+	
+	
+	
+#### TO RUN #####
+#QTAG works like a typical QIIME command, except you should use full paths. 
+#eg. 
+
+python FULLPATH/QTAG_8June2018.py -t taxatable.biom -m metadata.txt ...
+
+#You can type the following to see all options for QTAG. The options should also indicate whether it is mandatory or not.
+
+python FULLPATH/QTAG_8June2018.py -h
+
+
+
+
+
+
+
+#### **** ~~~~~~~~~~~~~~ QUICK START RUN INSTRUCTIONS ~~~~~~~~~~~~~~ **** ####
+# Below is a mini-pipeline to run QTAG. it includes basically the most important inputs and flags.
+# There are many other flags you can include, but most of them can be left at default.
+
+# First, fill in the following variables and then copy and paste the whole thing into terminal
+# Eg. metadataPWD=/Users/melissa/QTAGfiles/metadata.txt
+
+
+###### --------BEGIN COPYING HERE-------- ######
+
+## MANDATORY inputs ##
+
+# Pathway to python script
+QTAGscript=
+
+# Full path to table of sequences (QIIME OTU table or text file)
+taxaTablePWD=
+
+# Full path to metadata or mapping file; columns are factors, rows are samples
+metadataPWD=
+
+# Metadata name-- header name of gradient (eg. Salinity)
+metadataName=''
+
+## NOT MANDATORY, BUT RECOMMENDED TO CHANGE ##
+
+# Output directory name
+outputDir=
+
+# Rscript plotting file. You can omit this and it will run fine, but if you include the path to the Rscript plotting file, then it will also plot some figures for you.
+Rplotting=
+
+# Unit size-- if you are using salinity, then a logical unit size to use would be 1ppt. For pH, it might be 0.01. This is important to change because it controls how finely QTAG iterates through the gradient.
+unitsize=
+
+# minCountOTUinSample-- QTAG filters your OTU table before processing it. This input gets rid of sequences that are very low in abundance in each sample-- eg. If a sample has less than X reads of OTU1, then it will change it to '0'
+minCountOTUinSample=
+
+# minCountTable -- QTAG filters your OTU table before processing it. This input gets rid of sequences that do not occur more than X times over the entire OTU Table.
+minCountTable=
+
+
+# all other parameters *should* be okay for most datasets, but you should look over what they do to make sure it's restricting processing in a way that works for your data.
+###### --------END COPYING HERE-------- ####
+
+
+# Now, copy the following command into the command line:
+python $QTAGscript -t $taxaTablePWD -m $metadataPWD -M $metadataName -o $outputDir --unit_Size $unitsize --minCountTable $minCountTable --minCountOTUinSample $minCountOTUinSample --Rscript $Rplotting
+
+
+
+

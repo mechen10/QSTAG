@@ -1,0 +1,1 @@
+OTU8	InterRestrictOTU9	InterPeakOTU6	InterHiTolerOTU7	InterLoTolerOTU4	HighPeakOTU5	NoClassOTU2	LowPeakOTU3	LowRestrictOTU1	HighRestrict

@@ -1,0 +1,1 @@
+Low,Inter,High,gradient

@@ -1,0 +1,1 @@
+#SampleID	gradient	descriptionsamp1	1	samp1samp2	3	samp2samp3	4	samp3samp4	4	samp4samp5	5	samp5samp6	7	samp6samp7	9	samp7samp8	10	samp8samp9	12	samp9samp10	14	samp10samp11	15	samp11samp12	15	samp12samp13	17	samp13samp14	18	samp14samp15	20	samp15
